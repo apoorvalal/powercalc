@@ -51,13 +51,14 @@ def calculate_sample_size(
 
     return int(np.ceil((multiplier**2 * variance_term) / (mde**2 * denominator)))
 
+
 ##     ## #### ########
 ##     ##  ##       ##
 ##     ##  ##      ##
 ##     ##  ##     ##
- ##   ##   ##    ##
-  ## ##    ##   ##
-   ###    #### ########
+##   ##   ##    ##
+## ##    ##   ##
+###    #### ########
 
 st.title("Power Calculator for Two-arm trials with Binary Outcomes")
 
@@ -160,65 +161,10 @@ with left_col:
 with right_col:
     st.subheader("Advanced Adjustments")
 
-    tab1, tab2 = st.tabs(["Grouped Errors", "Noncompliance"])
-
-    # GROUPED ERRORS TAB
-    with tab1:
-        st.markdown("""
-        **Clustered randomization** (e.g., randomizing schools, not students):
-
-        $$\\text{Design Effect} = \\sqrt{1 + (n-1)\\rho}$$
-
-        Where $n$ = cluster size, $\\rho$ = intracluster correlation
-        """)
-
-        # Basic inputs
-        individual_n = st.number_input(
-            "Sample size (individual randomization)", 100, 100000, 1000, 100
-        )
-        cluster_size = st.number_input("Average cluster size", 2, 1000, 25, 1)
-        rho = st.slider("Intracluster correlation (ρ)", 0.0, 0.5, 0.05, 0.01)
-
-        # Calculate design effect and required clusters
-        design_effect = np.sqrt(1 + (cluster_size - 1) * rho)
-        effective_n = individual_n * design_effect**2
-        required_clusters = int(np.ceil(effective_n / cluster_size))
-
-        st.markdown(f"""
-        **Results:**
-        - Design Effect: {design_effect:.2f}
-        - Effective sample size needed: {effective_n:,.0f}
-        - Required clusters: {required_clusters:,}
-        - Total individuals: {required_clusters * cluster_size:,}
-        """)
-
-        if design_effect > 2:
-            st.warning(
-                f"⚠️ Large design effect ({design_effect:.1f}x)! Consider reducing cluster size or ρ."
-            )
-
-        # Show sensitivity
-        st.markdown("**Sensitivity to ρ:**")
-        rho_values = np.linspace(0, 0.3, 31)
-        design_effects = [np.sqrt(1 + (cluster_size - 1) * r) for r in rho_values]
-
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(rho_values, design_effects, "b-", linewidth=2)
-        ax.axhline(
-            y=design_effect,
-            color="red",
-            linestyle="--",
-            alpha=0.7,
-            label=f"Current: {design_effect:.2f}",
-        )
-        ax.set_xlabel("Intracluster Correlation (ρ)")
-        ax.set_ylabel("Design Effect")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        st.pyplot(fig)
+    tab1, tab2 = st.tabs(["Noncompliance", "Grouped Errors"])
 
     # NONCOMPLIANCE TAB
-    with tab2:
+    with tab1:
         st.markdown("""
         **Partial compliance** inflates required sample size:
 
@@ -284,5 +230,69 @@ with right_col:
             ax.grid(True, alpha=0.3)
             ax.legend()
             st.pyplot(fig)
+
+    # GROUPED ERRORS TAB
+    with tab2:
+        st.markdown("""
+        **Clustered randomization** (e.g., randomizing schools, not students):
+
+        $$\\text{Design Effect} = \\sqrt{1 + (n-1)\\rho}$$
+
+        Where $n$ = cluster size, $\\rho$ = intracluster correlation
+
+        The design effect is increasing in the cluster size and the intra-cluster correlation $\\rho = \\tau^2/(\\tau^2 + \\sigma^2)$.
+
+        The MDE is now given by
+
+        $$
+        \\text{MDE} = \\frac{M_{J-2}}{\\sqrt{P(1-P) J }} \\sqrt{ \\rho + \\frac{1 - \\rho}{n}  } \\sigma
+        $$
+        """)
+
+        # Basic inputs
+        individual_n = st.number_input(
+            "Sample size (individual randomization)", 100, 100000, 1000, 100
+        )
+        cluster_size = st.number_input("Average cluster size", 2, 1000, 25, 1)
+        rho = st.slider("Intracluster correlation (ρ)", 0.0, 0.5, 0.05, 0.01)
+
+        # Calculate design effect and required clusters
+        design_effect = np.sqrt(1 + (cluster_size - 1) * rho)
+        effective_n = individual_n * design_effect**2
+        required_clusters = int(np.ceil(effective_n / cluster_size))
+
+        st.markdown(f"""
+        **Results:**
+        - Design Effect: {design_effect:.2f}
+        - Effective sample size needed: {effective_n:,.0f}
+        - Required clusters: {required_clusters:,}
+        - Total individuals: {required_clusters * cluster_size:,}
+        """)
+
+        if design_effect > 2:
+            st.warning(
+                f"⚠️ Large design effect ({design_effect:.1f}x)! Consider reducing cluster size or ρ."
+            )
+
+        # Show sensitivity
+        st.markdown("**Sensitivity to ρ:**")
+        rho_values = np.linspace(0, 0.3, 31)
+        design_effects = [np.sqrt(1 + (cluster_size - 1) * r) for r in rho_values]
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(rho_values, design_effects, "b-", linewidth=2)
+        ax.axhline(
+            y=design_effect,
+            color="red",
+            linestyle="--",
+            alpha=0.7,
+            label=f"Current: {design_effect:.2f}",
+        )
+        ax.set_xlabel("Intracluster Correlation (ρ)")
+        ax.set_ylabel("Design Effect")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        st.pyplot(fig)
+
 
 st.markdown("---")
