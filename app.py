@@ -59,7 +59,7 @@ def calculate_sample_size(
   ## ##    ##   ##
    ###    #### ########
 
-st.title("Power Calculator for Binary Outcomes")
+st.title("Power Calculator for Two-arm trials with Binary Outcomes")
 
 st.markdown("""
 
@@ -70,18 +70,18 @@ $$
 $$
 
 where $\\sigma^2$ is the variance of the outcome.
-- $M$ is **Bloom's Multiplier:** $M = t_{1-κ} + t_α$ where $t_{1-κ}$ is the critical value for power (1-β) and $t_α$ is the critical value for significance level (α). For two-sided tests, use $t_{1-κ/2}$.
+- $M$ is **Bloom's Multiplier:** $M = t_{1-κ} + t_α$ where $t_{1-κ}$ is the critical value for power (1-β) and $t_α$ is the critical value for significance level (α). For two-sided tests, use $t_{1-κ/2}$. For two-sided tests, this typically simplifies to (1.96 for $\\alpha = 0.05$ + 0.84 for $\\beta = 0.2$) $\\approx$ 2.8.
 - $R^2$ = covariate adjustment term (0 if no adjustment)
 - $P$ = treatment fraction - propensity score
 - $n$ = sample size
 
-In this case, we use the fact that $y$ is binary so $\\sigma^2 = \\Pi(1-\\Pi)$.
+In the binary outcomes case, we use the fact that $y$ is binary so plug in the variance formula $\\sigma^2 = \\Pi(1-\\Pi)$.
 
 $$
 \\text{MDE} = M \\times \\sqrt{\\frac{\\Pi(1-\\Pi)(1-R^2)}{P(1-P)n}}
 $$
 
-Where $\\Pi$ = baseline rate of outcome (e.g., conversion rate)
+Where $\\Pi$ = baseline rate of outcome (e.g., conversion rate).
 
 References:
 - [Bloom 1995](https://journals.sagepub.com/doi/abs/10.1177/0193841X9501900504?casa_token=FChz76X2H_oAAAAA:9J-0ktpAMAJiGzBORUEtgPavbvk7GH3eAmGUQi5M5tPG2eChKb4lHo3kWg4VEzgz1pZb5OjSx5SoP6E&casa_token=Rl5v1YO9GaIAAAAA:udb_jf59f3E-Zcu8JOpmK8e9rRWfTeK_yjpaBPAiYgMMKtEJ9SadW5f1fF0wRgvQMg1V7SRx6Ezwr3s)
