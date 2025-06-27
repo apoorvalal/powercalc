@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 st.set_page_config(page_title="A/B Test Power Calculator", layout="wide")
-
+######################################################################
+######################################################################
+######################################################################
 
 def get_bloom_multiplier(alpha, power, two_sided=False):
     """Get Bloom's multiplier M = t_{1-κ} + t_α"""
@@ -17,189 +19,316 @@ def get_bloom_multiplier(alpha, power, two_sided=False):
     return t_power + t_alpha
 
 
-def calculate_mde(
+def calculate_mde_individual(
     n,
-    baseline_rate,
+    variance,
     treatment_fraction=0.5,
     alpha=0.05,
     power=0.8,
     two_sided=False,
     r_squared=0,
 ):
-    """Calculate MDE given sample size"""
-    variance_term = baseline_rate * (1 - baseline_rate) * (1 - r_squared)
-    denominator = treatment_fraction * (1 - treatment_fraction)
+    """Calculate MDE for individual randomization"""
     multiplier = get_bloom_multiplier(alpha, power, two_sided)
-
-    se = np.sqrt(variance_term / (denominator * n))
+    se = np.sqrt(
+        (variance * (1 - r_squared))
+        / (treatment_fraction * (1 - treatment_fraction) * n)
+    )
     return multiplier * se
 
 
-def calculate_sample_size(
-    mde,
-    baseline_rate,
+def calculate_mde_clustered(
+    n_clusters,
+    cluster_size,
+    variance,
+    rho,
     treatment_fraction=0.5,
     alpha=0.05,
     power=0.8,
     two_sided=False,
     r_squared=0,
 ):
-    """Calculate sample size given MDE"""
-    variance_term = baseline_rate * (1 - baseline_rate) * (1 - r_squared)
-    denominator = treatment_fraction * (1 - treatment_fraction)
+    """Calculate MDE for cluster randomization using Duflo et al. formula"""
+    # Degrees of freedom adjustment for cluster-level inference
+    if two_sided:
+        t_alpha = stats.t.ppf(1 - alpha / 2, df=n_clusters - 2)
+    else:
+        t_alpha = stats.t.ppf(1 - alpha, df=n_clusters - 2)
+
+    t_power = stats.norm.ppf(power)
+    multiplier = t_alpha + t_power
+
+    # Clustered variance formula: √[ρ + (1-ρ)/n] × σ
+    cluster_variance_factor = np.sqrt(rho + (1 - rho) / cluster_size)
+    adjusted_variance = variance * (1 - r_squared) * cluster_variance_factor**2
+
+    se = np.sqrt(
+        adjusted_variance / (treatment_fraction * (1 - treatment_fraction) * n_clusters)
+    )
+    return multiplier * se
+
+
+def calculate_sample_size_individual(
+    mde,
+    variance,
+    treatment_fraction=0.5,
+    alpha=0.05,
+    power=0.8,
+    two_sided=False,
+    r_squared=0,
+):
+    """Calculate sample size for individual randomization"""
     multiplier = get_bloom_multiplier(alpha, power, two_sided)
+    variance_term = variance * (1 - r_squared)
+    denominator = treatment_fraction * (1 - treatment_fraction)
 
     return int(np.ceil((multiplier**2 * variance_term) / (mde**2 * denominator)))
 
+
+def calculate_clusters_needed(
+    mde,
+    cluster_size,
+    variance,
+    rho,
+    treatment_fraction=0.5,
+    alpha=0.05,
+    power=0.8,
+    two_sided=False,
+    r_squared=0,
+):
+    """Calculate number of clusters needed for cluster randomization"""
+    # Use iterative approach since t-distribution depends on df
+    for n_clusters in range(4, 10000):
+        calculated_mde = calculate_mde_clustered(
+            n_clusters,
+            cluster_size,
+            variance,
+            rho,
+            treatment_fraction,
+            alpha,
+            power,
+            two_sided,
+            r_squared,
+        )
+        if calculated_mde <= mde:
+            return n_clusters
+    return None  # No solution found
+
+
+def apply_compliance_adjustment(
+    mde_or_n, compliance_treatment, compliance_control, adjust_type="mde"
+):
+    """Apply compliance adjustment to MDE or sample size"""
+    compliance_diff = compliance_treatment - compliance_control
+    if compliance_diff <= 0:
+        return None
+
+    if adjust_type == "mde":
+        return mde_or_n / compliance_diff
+    else:  # sample size
+        return int(np.ceil(mde_or_n * (1 / compliance_diff) ** 2))
 
 ##     ## #### ########
 ##     ##  ##       ##
 ##     ##  ##      ##
 ##     ##  ##     ##
-##   ##   ##    ##
-## ##    ##   ##
-###    #### ########
+ ##   ##   ##    ##
+  ## ##    ##   ##
+   ###    #### ########
 
-st.title("Power Calculator for Two-arm trials with Binary Outcomes")
+st.title("Power Calculator for Two-arm Trials")
 
 st.markdown("""
+**Core MDE Formula:**
 
-The general MDE formula is
+For **individual randomization:**
+$$\\text{MDE} = M \\times \\sqrt{\\frac{\\sigma^2(1-R^2)}{P(1-P)n}}$$
 
-$$
-\\text{MDE} = M \\times \\sqrt{\\frac{1}{P ( 1- P)} \\frac{\\sigma^2 (1-R^2)}{n}}
-$$
+For **cluster randomization:**
+$$\\text{MDE} = M_{J-2} \\times \\sqrt{\\frac{1}{P(1-P)J}} \\times \\sqrt{\\rho + \\frac{1-\\rho}{n}} \\times \\sigma$$
 
-where $\\sigma^2$ is the variance of the outcome.
-- $M$ is **Bloom's Multiplier:** $M = t_{1-κ} + t_α$ where $t_{1-κ}$ is the critical value for power (1-β) and $t_α$ is the critical value for significance level (α). For two-sided tests, use $t_{1-κ/2}$. For two-sided tests, this typically simplifies to (1.96 for $\\alpha = 0.05$ + 0.84 for $\\beta = 0.2$) $\\approx$ 2.8.
-- $R^2$ = covariate adjustment term (0 if no adjustment)
-- $P$ = treatment fraction - propensity score
-- $n$ = sample size
+Where: $M$ = multiplier, $\\sigma^2$ = outcome variance, $R^2$ = covariate adjustment, $P$ = treatment fraction, $\\rho$ = intracluster correlation, $J$ = clusters, $n$ = cluster size
 
-In the binary outcomes case, we use the fact that $y$ is binary so plug in the variance formula $\\sigma^2 = \\Pi(1-\\Pi)$.
-
-$$
-\\text{MDE} = M \\times \\sqrt{\\frac{\\Pi(1-\\Pi)(1-R^2)}{P(1-P)n}}
-$$
-
-Where $\\Pi$ = baseline rate of outcome (e.g., conversion rate).
-
-References:
-- [Bloom 1995](https://journals.sagepub.com/doi/abs/10.1177/0193841X9501900504?casa_token=FChz76X2H_oAAAAA:9J-0ktpAMAJiGzBORUEtgPavbvk7GH3eAmGUQi5M5tPG2eChKb4lHo3kWg4VEzgz1pZb5OjSx5SoP6E&casa_token=Rl5v1YO9GaIAAAAA:udb_jf59f3E-Zcu8JOpmK8e9rRWfTeK_yjpaBPAiYgMMKtEJ9SadW5f1fF0wRgvQMg1V7SRx6Ezwr3s)
-- [Duflo, Glennerster, Kremer 2007](https://www.povertyactionlab.org/sites/default/files/research-paper/Using-Randomization-in-Development-Economics.pdf)
+**References:** [Bloom 1995](https://journals.sagepub.com/doi/abs/10.1177/0193841X9501900504), [Duflo, Glennerster, Kremer 2007](https://www.povertyactionlab.org/sites/default/files/research-paper/Using-Randomization-in-Development-Economics.pdf)
 """)
 
 left_col, right_col = st.columns(2)
 
 # LEFT PANEL: Basic Calculator
 with left_col:
-    st.subheader("Basic Calculator")
+    st.subheader("Power Calculator")
+
+    # Outcome type selection
+    outcome_type = st.radio("Outcome Type:", ["Binary", "Continuous"])
+
+    # Variance specification
+    if outcome_type == "Binary":
+        baseline_rate = st.slider("Baseline Rate (π)", 0.01, 0.99, 0.1, 0.01)
+        variance = baseline_rate * (1 - baseline_rate)
+        st.write(f"Implied variance: σ² = π(1-π) = {variance:.4f}")
+    else:
+        variance = st.number_input("Outcome Variance (σ²)", 0.01, 100.0, 1.0, 0.01)
 
     # Common parameters
     alpha = st.selectbox("Significance Level (α)", [0.01, 0.05, 0.10], index=1)
     power = st.selectbox("Power (1-β)", [0.8, 0.9, 0.95], index=0)
     two_sided = st.checkbox("Two-sided test", value=False)
-    treatment_fraction = st.slider("Treatment Allocation", 0.1, 0.9, 0.5, 0.05)
+    treatment_fraction = st.slider("Treatment Allocation (P)", 0.1, 0.9, 0.5, 0.05)
     r_squared = st.slider("Covariate Adjustment (R²)", 0.0, 0.8, 0.0, 0.05)
+
+    # Randomization type
+    randomization_type = st.radio("Randomization Level:", ["Individual", "Cluster"])
+
+    if randomization_type == "Cluster":
+        cluster_size = st.number_input("Average Cluster Size", 2, 1000, 25, 1)
+        rho = st.slider("Intracluster Correlation (ρ)", 0.0, 0.5, 0.05, 0.01)
+
     st.markdown("---")
 
     calculation_type = st.radio("Calculate:", ["Sample Size", "MDE"])
 
     if calculation_type == "Sample Size":
-        mde = st.number_input("Target MDE", 0.001, 0.5, 0.05, 0.001, format="%.3f")
-        baseline_rate = st.slider("Baseline Rate", 0.01, 0.99, 0.1, 0.01)
+        mde = st.number_input("Target MDE", 0.001, 10.0, 0.05, 0.001, format="%.3f")
 
         if st.button("Calculate Sample Size"):
-            n = calculate_sample_size(
-                mde,
-                baseline_rate,
-                treatment_fraction,
-                alpha,
-                power,
-                two_sided,
-                r_squared,
-            )
-            st.success(f"**Required Sample Size: {n:,}**")
+            if randomization_type == "Individual":
+                n = calculate_sample_size_individual(
+                    mde,
+                    variance,
+                    treatment_fraction,
+                    alpha,
+                    power,
+                    two_sided,
+                    r_squared,
+                )
+                st.success(f"**Required Sample Size: {n:,}**")
 
-            # Show breakdown
-            multiplier = get_bloom_multiplier(alpha, power, two_sided)
-            variance_term = baseline_rate * (1 - baseline_rate) * (1 - r_squared)
-            denominator = treatment_fraction * (1 - treatment_fraction)
+                # Show breakdown
+                multiplier = get_bloom_multiplier(alpha, power, two_sided)
+                st.markdown(f"""
+                **Calculation:**
+                - Multiplier (M): {multiplier:.2f}
+                - Variance term: {variance * (1 - r_squared):.4f}
+                - Allocation term: {treatment_fraction * (1 - treatment_fraction):.3f}
+                """)
+            else:  # Cluster
+                n_clusters = calculate_clusters_needed(
+                    mde,
+                    cluster_size,
+                    variance,
+                    rho,
+                    treatment_fraction,
+                    alpha,
+                    power,
+                    two_sided,
+                    r_squared,
+                )
+                if n_clusters:
+                    total_n = n_clusters * cluster_size
+                    st.success(f"**Required Clusters: {n_clusters:,}**")
+                    st.success(f"**Total Sample Size: {total_n:,}**")
 
-            st.markdown(f"""
-            **Calculation:**
-            - Multiplier: {multiplier:.2f}
-            - Variance term: {variance_term:.4f}
-            - Allocation term: {denominator:.3f}
-            - Formula: n = ({multiplier:.2f})² × {variance_term:.4f} / ({mde:.3f})² × {denominator:.3f}
-            """)
+                    # Show cluster-specific breakdown
+                    design_effect = np.sqrt(rho + (1 - rho) / cluster_size)
+                    st.markdown(f"""
+                    **Cluster Calculation:**
+                    - Clusters needed: {n_clusters:,}
+                    - Design effect: {design_effect:.2f}
+                    - Effective variance inflation: {design_effect**2:.2f}x
+                    """)
+                else:
+                    st.error(
+                        "Could not find feasible solution - try larger MDE or different parameters"
+                    )
 
     elif calculation_type == "MDE":
-        n = st.number_input("Sample Size", 100, 1000000, 1000, 100)
-        baseline_rate = st.slider("Baseline Rate", 0.01, 0.99, 0.1, 0.01)
+        if randomization_type == "Individual":
+            n = st.number_input("Sample Size", 100, 1000000, 1000, 100)
 
-        if st.button("Calculate MDE"):
-            mde = calculate_mde(
-                n, baseline_rate, treatment_fraction, alpha, power, two_sided, r_squared
-            )
-            st.success(f"**Detectable MDE: {mde:.3f}**")
+            if st.button("Calculate MDE"):
+                mde = calculate_mde_individual(
+                    n, variance, treatment_fraction, alpha, power, two_sided, r_squared
+                )
+                st.success(f"**Detectable MDE: {mde:.3f}**")
 
-            # Show calculation
-            multiplier = get_bloom_multiplier(alpha, power, two_sided)
-            variance_term = baseline_rate * (1 - baseline_rate) * (1 - r_squared)
-            se = np.sqrt(
-                variance_term / (treatment_fraction * (1 - treatment_fraction) * n)
-            )
+                # Show calculation
+                multiplier = get_bloom_multiplier(alpha, power, two_sided)
+                se = np.sqrt(
+                    (variance * (1 - r_squared))
+                    / (treatment_fraction * (1 - treatment_fraction) * n)
+                )
+                st.markdown(f"""
+                **Calculation:**
+                - Standard Error: {se:.4f}
+                - MDE = {multiplier:.2f} × {se:.4f} = {mde:.3f}
+                """)
+        else:  # Cluster
+            n_clusters = st.number_input("Number of Clusters", 4, 10000, 20, 1)
 
-            st.markdown(f"""
-            **Calculation:**
-            - Standard Error: {se:.4f}
-            - MDE = {multiplier:.2f} × {se:.4f} = {mde:.3f}
-            """)
+            if st.button("Calculate MDE"):
+                mde = calculate_mde_clustered(
+                    n_clusters,
+                    cluster_size,
+                    variance,
+                    rho,
+                    treatment_fraction,
+                    alpha,
+                    power,
+                    two_sided,
+                    r_squared,
+                )
+                total_n = n_clusters * cluster_size
+                st.success(f"**Detectable MDE: {mde:.3f}**")
+                st.info(
+                    f"With {n_clusters} clusters of size {cluster_size} (total N = {total_n:,})"
+                )
 
-# RIGHT PANEL: Advanced Adjustments
+                # Show cluster calculation details
+                design_effect = np.sqrt(rho + (1 - rho) / cluster_size)
+                st.markdown(f"""
+                **Cluster Calculation:**
+                - Design effect: {design_effect:.2f}
+                - Intracluster correlation: {rho:.3f}
+                - Effective variance inflation: {design_effect**2:.2f}x
+                """)
+
+########     ###    ##    ## ######## ##        ######
+##     ##   ## ##   ###   ## ##       ##       ##    ##
+##     ##  ##   ##  ####  ## ##       ##       ##
+########  ##     ## ## ## ## ######   ##        ######
+##        ######### ##  #### ##       ##             ##
+##        ##     ## ##   ### ##       ##       ##    ##
+##        ##     ## ##    ## ######## ########  ######
+
+# RIGHT PANEL: Compliance Adjustment
 with right_col:
-    st.subheader("Advanced Adjustments")
+    st.subheader("Compliance Adjustment")
 
-    tab1, tab2 = st.tabs(["Noncompliance", "Grouped Errors"])
+    st.markdown("""
+    **Imperfect compliance** reduces effective treatment contrast:
 
-    # NONCOMPLIANCE TAB
-    with tab1:
-        st.markdown("""
-        **Partial compliance** inflates required sample size:
+    $$\\text{MDE}_{\\text{adjusted}} = \\frac{\\text{MDE}_{\\text{perfect}}}{c - s}$$
 
-        $$\\text{MDE}_{\\text{compliance}} = \\frac{\\text{MDE}_{\\text{perfect}}}{c - s}$$
+    Where $c$ = treatment compliance, $s$ = control compliance
+    """)
 
-        Where $c$ = treatment group compliance, $s$ = control group compliance
-        """)
+    # Compliance parameters
+    enable_compliance = st.checkbox("Apply compliance adjustment", value=False)
 
-        # Compliance rates
-        c = st.slider("Treatment group compliance rate", 0.1, 1.0, 0.8, 0.05)
-        s = st.slider("Control group compliance rate", 0.0, 0.5, 0.05, 0.05)
+    if enable_compliance:
+        c = st.slider("Treatment group compliance", 0.1, 1.0, 0.8, 0.05)
+        s = st.slider("Control group compliance", 0.0, 0.5, 0.05, 0.05)
 
         compliance_diff = c - s
         if compliance_diff <= 0:
             st.error("Treatment compliance must exceed control compliance")
         else:
-            # Base calculation
-            base_n = st.number_input(
-                "Sample size (perfect compliance)", 100, 100000, 1000, 100
-            )
-            base_mde = st.number_input(
-                "MDE (perfect compliance)", 0.001, 0.5, 0.05, 0.001, format="%.3f"
-            )
-
-            # Adjusted calculations
             compliance_factor = 1 / compliance_diff
-            adjusted_mde = base_mde * compliance_factor
-            adjusted_n = int(base_n * compliance_factor**2)
-
             st.markdown(f"""
-            **Results:**
-            - Compliance difference: {compliance_diff:.2f}
+            **Compliance Impact:**
+            - Effective contrast: {compliance_diff:.2f}
             - Inflation factor: {compliance_factor:.2f}x
-            - Required sample size: {adjusted_n:,} ({compliance_factor**2:.1f}x larger)
-            - Detectable MDE: {adjusted_mde:.3f} ({compliance_factor:.1f}x larger)
+            - Sample size penalty: {compliance_factor**2:.1f}x
             """)
 
             if compliance_factor > 2:
@@ -207,9 +336,8 @@ with right_col:
                     f"⚠️ Low compliance inflates requirements by {compliance_factor:.1f}x!"
                 )
 
-            # Show compliance impact
-            st.markdown("**Impact of Compliance Rate:**")
-            c_values = np.linspace(0.3, 1.0, 71)
+            # Show compliance sensitivity
+            c_values = np.linspace(max(s + 0.1, 0.3), 1.0, 50)
             factors = [1 / (c_val - s) for c_val in c_values]
 
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -225,74 +353,52 @@ with right_col:
                 label=f"Factor={compliance_factor:.2f}",
             )
             ax.set_xlabel("Treatment Compliance Rate")
-            ax.set_ylabel("Sample Size Inflation Factor")
+            ax.set_ylabel("MDE Inflation Factor")
             ax.set_ylim(1, min(10, max(factors)))
             ax.grid(True, alpha=0.3)
             ax.legend()
             st.pyplot(fig)
+    else:
+        compliance_factor = 1.0
 
-    # GROUPED ERRORS TAB
-    with tab2:
-        st.markdown("""
-        **Clustered randomization** (e.g., randomizing schools, not students):
-
-        $$\\text{Design Effect} = \\sqrt{1 + (n-1)\\rho}$$
-
-        Where $n$ = cluster size, $\\rho$ = intracluster correlation
-
-        The design effect is increasing in the cluster size and the intra-cluster correlation $\\rho = \\tau^2/(\\tau^2 + \\sigma^2)$.
-
-        The MDE is now given by
-
-        $$
-        \\text{MDE} = \\frac{M_{J-2}}{\\sqrt{P(1-P) J }} \\sqrt{ \\rho + \\frac{1 - \\rho}{n}  } \\sigma
-        $$
-        """)
-
-        # Basic inputs
-        individual_n = st.number_input(
-            "Sample size (individual randomization)", 100, 100000, 1000, 100
-        )
-        cluster_size = st.number_input("Average cluster size", 2, 1000, 25, 1)
-        rho = st.slider("Intracluster correlation (ρ)", 0.0, 0.5, 0.05, 0.01)
-
-        # Calculate design effect and required clusters
-        design_effect = np.sqrt(1 + (cluster_size - 1) * rho)
-        effective_n = individual_n * design_effect**2
-        required_clusters = int(np.ceil(effective_n / cluster_size))
-
+    # Apply compliance adjustment to results
+    if "mde" in locals() and enable_compliance and compliance_diff > 0:
+        adjusted_mde = apply_compliance_adjustment(mde, c, s, "mde")
         st.markdown(f"""
-        **Results:**
-        - Design Effect: {design_effect:.2f}
-        - Effective sample size needed: {effective_n:,.0f}
-        - Required clusters: {required_clusters:,}
-        - Total individuals: {required_clusters * cluster_size:,}
+        ### **Compliance-Adjusted Results:**
+        - **Perfect compliance MDE:** {mde:.3f}
+        - **Realistic MDE:** {adjusted_mde:.3f}
         """)
 
-        if design_effect > 2:
-            st.warning(
-                f"⚠️ Large design effect ({design_effect:.1f}x)! Consider reducing cluster size or ρ."
-            )
+    if (
+        "n" in locals()
+        and enable_compliance
+        and compliance_diff > 0
+        and randomization_type == "Individual"
+    ):
+        adjusted_n = apply_compliance_adjustment(n, c, s, "sample_size")
+        st.markdown(f"""
+        ### **Compliance-Adjusted Results:**
+        - **Perfect compliance N:** {n:,}
+        - **Realistic N:** {adjusted_n:,}
+        """)
 
-        # Show sensitivity
-        st.markdown("**Sensitivity to ρ:**")
-        rho_values = np.linspace(0, 0.3, 31)
-        design_effects = [np.sqrt(1 + (cluster_size - 1) * r) for r in rho_values]
-
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(rho_values, design_effects, "b-", linewidth=2)
-        ax.axhline(
-            y=design_effect,
-            color="red",
-            linestyle="--",
-            alpha=0.7,
-            label=f"Current: {design_effect:.2f}",
-        )
-        ax.set_xlabel("Intracluster Correlation (ρ)")
-        ax.set_ylabel("Design Effect")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        st.pyplot(fig)
-
+    if (
+        "n_clusters" in locals()
+        and enable_compliance
+        and compliance_diff > 0
+        and randomization_type == "Cluster"
+    ):
+        adjusted_clusters = apply_compliance_adjustment(n_clusters, c, s, "sample_size")
+        adjusted_total = adjusted_clusters * cluster_size
+        st.markdown(f"""
+        ### **Compliance-Adjusted Results:**
+        - **Perfect compliance clusters:** {n_clusters:,}
+        - **Realistic clusters:** {adjusted_clusters:,}
+        - **Realistic total N:** {adjusted_total:,}
+        """)
 
 st.markdown("---")
+st.markdown(
+    "*Calculate statistical power for randomized controlled trials with binary or continuous outcomes*"
+)
